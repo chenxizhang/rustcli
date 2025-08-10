@@ -1,0 +1,62 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build Rust Project",
+			"type": "shell",
+			"command": "C:\\Program Files\\Rust stable MSVC 1.88\\bin\\cargo.exe",
+			"args": [
+				"build"
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			}
+		},
+		{
+			"label": "Run Rust Chat CLI (Help)",
+			"type": "shell",
+			"command": "C:\\Program Files\\Rust stable MSVC 1.88\\bin\\cargo.exe",
+			"args": [
+				"run",
+				"--",
+				"--help"
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build Rust Project (Release)",
+			"type": "shell",
+			"command": "C:\\Program Files\\Rust stable MSVC 1.88\\bin\\cargo.exe",
+			"args": [
+				"build",
+				"--release"
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": {
+				"kind": "build"
+			}
+		},
+		{
+			"label": "Package (Windows)",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"scripts/package.ps1"
+			],
+			"problemMatcher": []
+		}
+	]
+}
