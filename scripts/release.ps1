@@ -60,12 +60,22 @@ Set-CargoVersion -CargoToml $CargoToml -NewVersion $new
 
 # Stage version file and commit
 git add $CargoToml | Out-Null
-$commitMsg = if ([string]::IsNullOrWhiteSpace($Message)) { "chore(release): v$new" } else { "chore(release): v$new - $Message" }
-git commit -m "$commitMsg" | Out-Null
+
+# Build a concise diff summary (filenames + short stats)
+$summary = git diff --cached --name-status | Out-String
+if ([string]::IsNullOrWhiteSpace($summary)) {
+    # Fallback to non-cached diff if needed
+    $summary = git diff --name-status | Out-String
+}
+
+$subject = if ([string]::IsNullOrWhiteSpace($Message)) { "chore(release): v$new" } else { "chore(release): v$new - $Message" }
+$body = "\nSummary of changes:\n$summary".TrimEnd()
+
+git commit -m $subject -m $body | Out-Null
 
 # Create annotated tag
 $tag = "v$new"
-git tag -a $tag -m "$commitMsg"
+git tag -a $tag -m $subject -m $body
 
 # Push commit and tag
 # Ensure a default remote exists
@@ -75,4 +85,4 @@ if (-not $remote) { throw 'No git remote configured. Add a remote and try again.
 git push $remote HEAD | Out-Null
 git push $remote --tags | Out-Null
 
-Write-Host "Pushed $commitMsg and tag $tag to $remote" -ForegroundColor Green
+Write-Host "Pushed $subject and tag $tag to $remote" -ForegroundColor Green

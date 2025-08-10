@@ -36,11 +36,11 @@ Or with parameters: `cargo run -- --endpoint "your-endpoint" --api-key "your-key
 - For non-streaming mode, omit or set `stream: false` and parse the standard JSON response.
 - Maintain a conversation history starting with a `system` message: "You are a helpful assistant." unless instructed otherwise.
 
-## Wrap-up workflow (on user says "收工")
-When the user says "收工":
+## Wrap-up workflow (on user says "收工", "done", or "go")
+When the user says any of: "收工", "done", or "go":
 1. Save all open files and ensure changes are written to disk.
 2. Read `Cargo.toml`, increment the patch version (e.g., 0.1.3 -> 0.1.4), and remember the new version string `vX.Y.Z` for this session.
-3. Stage changes and create a commit with message `chore(release): vX.Y.Z`.
+3. Stage changes and create a commit with subject `chore(release): vX.Y.Z` and include a concise summary of the changes in the commit body (e.g., affected files and short highlights from the diff).
 4. Create an annotated Git tag `vX.Y.Z`.
 5. Push the commit and the tag to the default Git remote.
 6. If a GitHub Actions release workflow exists, note that the tag will trigger the build and release.
