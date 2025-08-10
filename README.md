@@ -74,11 +74,14 @@ You can bump the version, commit, tag, and push with VS Code tasks (PowerShell u
 This uses `scripts/release.ps1` to:
 1) read current version from Cargo.toml
 2) bump it
-3) commit with message `chore(release): v<version>`
-4) create tag `v<version>`
+3) commit with message `chore(release): v<version>` and an AI-written summary of changes in the body
+4) create tag `v<version>` with the same summary
 5) push commit and tag to the default remote
 
 If you use the provided GitHub Actions `release.yml`, pushing a tag `vX.Y.Z` will build and attach artifacts to the GitHub Release.
+
+Advanced: you can pass a pre-generated summary to the script when running manually:
+`pwsh scripts/release.ps1 -Bump patch -Summary "- Add streaming SSE support\n- Update README to English-only"`
 
 ## Examples
 

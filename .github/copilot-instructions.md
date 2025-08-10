@@ -40,8 +40,9 @@ Or with parameters: `cargo run -- --endpoint "your-endpoint" --api-key "your-key
 When the user says any of: "收工", "done", or "go":
 1. Save all open files and ensure changes are written to disk.
 2. Read `Cargo.toml`, increment the patch version (e.g., 0.1.3 -> 0.1.4), and remember the new version string `vX.Y.Z` for this session.
-3. Stage changes and create a commit with subject `chore(release): vX.Y.Z` and include a concise summary of the changes in the commit body (e.g., affected files and short highlights from the diff).
+3. Stage changes and create a commit with subject `chore(release): vX.Y.Z` and include an AI-written concise summary of the changes in the commit body (1–6 short bullets). Base the summary on the session context and git diff, but do NOT paste raw diffs.
 4. Create an annotated Git tag `vX.Y.Z`.
+	- Include the same AI-written summary in the tag body.
 5. Push the commit and the tag to the default Git remote.
 6. If a GitHub Actions release workflow exists, note that the tag will trigger the build and release.
 

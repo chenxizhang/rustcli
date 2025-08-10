@@ -1,6 +1,7 @@
 param(
     [ValidateSet('patch','minor','major')][string]$Bump = 'patch',
-    [string]$Message = ''
+    [string]$Message = '',
+    [string]$Summary = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,15 +62,17 @@ Set-CargoVersion -CargoToml $CargoToml -NewVersion $new
 # Stage version file and commit
 git add $CargoToml | Out-Null
 
-# Build a concise diff summary (filenames + short stats)
-$summary = git diff --cached --name-status | Out-String
-if ([string]::IsNullOrWhiteSpace($summary)) {
-    # Fallback to non-cached diff if needed
-    $summary = git diff --name-status | Out-String
+if ([string]::IsNullOrWhiteSpace($Summary)) {
+    # Build a concise diff summary (filenames + short stats) if no AI-written summary provided
+    $Summary = git diff --cached --name-status | Out-String
+    if ([string]::IsNullOrWhiteSpace($Summary)) {
+        # Fallback to non-cached diff if needed
+        $Summary = git diff --name-status | Out-String
+    }
 }
 
 $subject = if ([string]::IsNullOrWhiteSpace($Message)) { "chore(release): v$new" } else { "chore(release): v$new - $Message" }
-$body = "\nSummary of changes:\n$summary".TrimEnd()
+$body = "\nSummary of changes:\n$Summary".TrimEnd()
 
 git commit -m $subject -m $body | Out-Null
 
