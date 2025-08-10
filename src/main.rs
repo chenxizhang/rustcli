@@ -7,6 +7,7 @@ use std::{
     env,
     io::{self, Write},
 };
+use futures_util::StreamExt;
 
 #[derive(Parser)]
 #[command(name = "rust-openai-chat")]
@@ -38,6 +39,11 @@ struct Cli {
         hide_env_values = true
     )]
     api_version: String,
+
+    /// Enable streaming responses (SSE). Set --stream=false to disable.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set, 
+        help = "Enable streaming responses (SSE). Set --stream=false to disable.")]
+    stream: bool,
 }
 
 #[derive(Serialize)]
@@ -45,6 +51,8 @@ struct ChatRequest {
     messages: Vec<ChatMessage>,
     max_tokens: u32,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -92,6 +100,7 @@ impl ChatClient {
             messages: messages.to_vec(),
             max_tokens: 1000,
             temperature: 0.7,
+            stream: Some(false),
         };
 
         let response = self
@@ -122,13 +131,126 @@ impl ChatClient {
             .content
             .clone())
     }
+
+    async fn send_message_streaming(&self, messages: &[ChatMessage]) -> Result<String> {
+        let url = format!(
+            "{}/openai/deployments/{}/chat/completions?api-version={}",
+            self.endpoint, self.model, self.api_version
+        );
+
+        let request = ChatRequest {
+            messages: messages.to_vec(),
+            max_tokens: 1000,
+            temperature: 0.7,
+            stream: Some(true),
+        };
+
+    let response = self
+            .client
+            .post(&url)
+            .header("api-key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send request to Azure OpenAI (stream)")?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("API request failed: {}", error_text);
+        }
+
+    // Stream Server-Sent Events: lines starting with 'data: '
+    let mut body_stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut full_text = String::new();
+    let mut done = false;
+
+        // Write prefix once; the caller prints the label.
+        while let Some(chunk) = body_stream.next().await {
+            let chunk = chunk.context("Failed reading stream chunk")?;
+            let s = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&s);
+
+            // Process complete lines
+        while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end().to_string();
+                buffer.drain(..pos + 1);
+
+                if line.is_empty() { continue; }
+
+                // Azure sends lines like: "data: {json}" and "data: [DONE]"
+                let data_prefix = "data:";
+                if let Some(rest) = line.strip_prefix(data_prefix) {
+                    let data = rest.trim();
+            if data == "[DONE]" { done = true; break; }
+
+                    if let Some(delta) = extract_delta_from_stream_payload(data) {
+                        print!("{}", delta);
+                        io::stdout().flush().ok();
+                        full_text.push_str(&delta);
+                    }
+                }
+            }
+            if done { break; }
+        }
+
+        // Ensure newline after stream completes
+        println!();
+        Ok(full_text)
+    }
+}
+
+/// Extract the incremental content delta from a single SSE JSON payload string.
+/// Returns Some(content) if choices[0].delta.content exists and is non-empty.
+fn extract_delta_from_stream_payload(data: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(data).ok()?;
+    let s = v
+        .get("choices")?
+        .get(0)?
+        .get("delta")?
+        .get("content")?
+        .as_str()?;
+    if s.is_empty() { None } else { Some(s.to_string()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_delta_content() {
+        let payload = r#"{"choices":[{"delta":{"content":"Hello"}}]}"#;
+        assert_eq!(extract_delta_from_stream_payload(payload), Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn ignores_noncontent() {
+        let payload = r#"{"choices":[{"delta":{"role":"assistant"}}]}"#;
+        assert_eq!(extract_delta_from_stream_payload(payload), None);
+    }
+
+    #[test]
+    fn accumulates_sequence() {
+        let parts = vec![
+            r#"{"choices":[{"delta":{"content":"Hel"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"lo"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"!"}}]}"#,
+        ];
+        let mut s = String::new();
+        for p in parts {
+            if let Some(x) = extract_delta_from_stream_payload(p) { s.push_str(&x); }
+        }
+        assert_eq!(s, "Hello!");
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // 获取必需的配置，如果命令行参数或环境变量都没有提供则报错
+    // Read required configuration; error out if neither CLI args nor env vars provide them
     let endpoint = cli.endpoint
         .or_else(|| env::var("OPENAI_API_ENDPOINT").ok())
         .context("Azure OpenAI endpoint is required. Provide it via --endpoint argument or OPENAI_API_ENDPOINT environment variable")?;
@@ -143,7 +265,7 @@ async fn main() -> Result<()> {
         cli.model
     };
 
-    let chat_client = ChatClient::new(endpoint, api_key, model, cli.api_version);
+    let chat_client = ChatClient::new(endpoint, api_key, model, cli.api_version.clone());
     let mut conversation: Vec<ChatMessage> = vec![ChatMessage {
         role: "system".to_string(),
         content: "You are a helpful assistant.".to_string(),
@@ -155,13 +277,13 @@ async fn main() -> Result<()> {
     println!("{}", "=".repeat(50));
 
     loop {
-        // 获取用户输入
+    // Read user input from prompt
         let user_input: String = Input::with_theme(&ColorfulTheme::default())
             .with_prompt("You")
             .interact_text()
             .context("Failed to read user input")?;
 
-        // 处理特殊命令
+    // Handle special commands
         match user_input.trim().to_lowercase().as_str() {
             "quit" | "exit" => {
                 println!("👋 Goodbye!");
@@ -180,25 +302,35 @@ async fn main() -> Result<()> {
             _ => {}
         }
 
-        // 添加用户消息到对话历史
+    // Append user message to the conversation history
         conversation.push(ChatMessage {
             role: "user".to_string(),
             content: user_input,
         });
 
-        // 显示"正在思考"指示器
+    // Show a "thinking" indicator
         print!("🤖 Assistant: ");
         io::stdout().flush().unwrap();
-        print!("thinking...\r");
-        io::stdout().flush().unwrap();
+        if !cli.stream {
+            print!("thinking...\r");
+            io::stdout().flush().unwrap();
+        }
 
-        // 发送请求到Azure OpenAI
-        match chat_client.send_message(&conversation).await {
+    // Send request to Azure OpenAI
+        let result = if cli.stream {
+            chat_client.send_message_streaming(&conversation).await
+        } else {
+            chat_client.send_message(&conversation).await
+        };
+
+        match result {
             Ok(response) => {
-                // 清除"thinking..."提示并显示回复
-                print!("\r🤖 Assistant: {}\n", response);
+                // For non-streaming mode: clear "thinking..." and print reply
+                if !cli.stream {
+                    print!("\r🤖 Assistant: {}\n", response);
+                }
 
-                // 将助手回复添加到对话历史
+                // Append assistant reply to conversation history
                 conversation.push(ChatMessage {
                     role: "assistant".to_string(),
                     content: response,
@@ -206,7 +338,7 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 println!("\r❌ Error: {}", e);
-                // 如果出错，从对话历史中移除用户的最后一条消息
+                // On error, remove the last user message from history
                 conversation.pop();
             }
         }

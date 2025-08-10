@@ -57,6 +57,51 @@
 				"scripts/package.ps1"
 			],
 			"problemMatcher": []
+		},
+		{
+			"label": "Release: patch",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"scripts/release.ps1",
+				"-Bump",
+				"patch"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Release: minor",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"scripts/release.ps1",
+				"-Bump",
+				"minor"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Release: major",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"scripts/release.ps1",
+				"-Bump",
+				"major"
+			],
+			"problemMatcher": []
 		}
 	]
 }
