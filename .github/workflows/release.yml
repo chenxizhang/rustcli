@@ -47,6 +47,8 @@ jobs:
           $zip = Join-Path $DIST "$NAME-$VER-${{ matrix.target }}.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path $OUTDIR -DestinationPath $zip
+          # Clean temp directory to avoid uploading raw files
+          Remove-Item -Recurse -Force $OUTDIR
       
       - name: Package (Unix)
         if: ${{ matrix.os != 'windows-latest' }}
@@ -66,11 +68,15 @@ jobs:
           [ -f README.md ] && cp README.md "$OUTDIR/"
           [ -f LICENSE ] && cp LICENSE "$OUTDIR/"
           tar -czf "$DIST/$NAME-$VER-${{ matrix.target }}.tar.gz" -C "$DIST" "$(basename "$OUTDIR")"
+          # Clean temp directory to avoid uploading raw files
+          rm -rf "$OUTDIR"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/*
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
 
   release:
     needs: build
