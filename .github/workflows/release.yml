@@ -53,8 +53,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          NAME=$(grep '^name' Cargo.toml | sed -E 's/name\s*=\s*"([^"]+)"/\1/' | tr -d '\r')
-          VER=$(grep '^version' Cargo.toml | sed -E 's/version\s*=\s*"([^"]+)"/\1/' | tr -d '\r')
+          NAME=$(sed -n -E 's/^name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' Cargo.toml | head -n 1 | tr -d '\r')
+          VER=$(sed -n -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' Cargo.toml | head -n 1 | tr -d '\r')
+          if [[ -z "$NAME" || -z "$VER" ]]; then echo "Failed to parse name/version from Cargo.toml" >&2; exit 1; fi
+          echo "Packaging $NAME $VER for ${{ matrix.target }}"
           DIST=dist
           mkdir -p "$DIST"
           BIN="target/${{ matrix.target }}/release/$NAME"
