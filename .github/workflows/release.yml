@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     strategy:
-  fail-fast: false
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -20,7 +20,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - os: macos-latest
-    target: aarch64-apple-darwin
+            target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,27 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Package
+      - name: Package (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $NAME = (Select-String -Path Cargo.toml -Pattern '^name\s*=\s*"([^"]+)"').Matches.Groups[1].Value
+          $VER = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
+          $DIST = 'dist'
+          New-Item -ItemType Directory -Path $DIST -Force | Out-Null
+          $BIN = "target/${{ matrix.target }}/release/$NAME.exe"
+          $OUTDIR = Join-Path $DIST "$NAME-$VER-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $OUTDIR -Force | Out-Null
+          Copy-Item $BIN "$OUTDIR/"
+          if (Test-Path README.md) { Copy-Item README.md "$OUTDIR/" }
+          if (Test-Path LICENSE) { Copy-Item LICENSE "$OUTDIR/" }
+          $zip = Join-Path $DIST "$NAME-$VER-${{ matrix.target }}.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path $OUTDIR -DestinationPath $zip
+      
+      - name: Package (Unix)
+        if: ${{ matrix.os != 'windows-latest' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -38,17 +58,12 @@ jobs:
           DIST=dist
           mkdir -p "$DIST"
           BIN="target/${{ matrix.target }}/release/$NAME"
-          if [[ "${{ matrix.os }}" == windows-latest ]]; then BIN+=".exe"; fi
           OUTDIR="$DIST/$NAME-$VER-${{ matrix.target }}"
           mkdir -p "$OUTDIR"
           cp "$BIN" "$OUTDIR/"
           [ -f README.md ] && cp README.md "$OUTDIR/"
           [ -f LICENSE ] && cp LICENSE "$OUTDIR/"
-          if [[ "${{ matrix.os }}" == windows-latest ]]; then
-            7z a "$DIST/$NAME-$VER-${{ matrix.target }}.zip" "$OUTDIR" >/dev/null
-          else
-            tar -czf "$DIST/$NAME-$VER-${{ matrix.target }}.tar.gz" -C "$DIST" "$(basename "$OUTDIR")"
-          fi
+          tar -czf "$DIST/$NAME-$VER-${{ matrix.target }}.tar.gz" -C "$DIST" "$(basename "$OUTDIR")"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
