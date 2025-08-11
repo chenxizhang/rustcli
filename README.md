@@ -125,3 +125,24 @@ rust-openai-chat/
 ## License
 
 MIT License
+
+## MCP (Model Context Protocol)
+
+Experimental support for MCP servers over stdio is available.
+
+- Provide a YAML file via `--mcp-config path/to/mcp.yaml` or set env `MCP_CONFIG`.
+- The CLI will start the servers, initialize them, and list available tools.
+- A future update will let the assistant call tools automatically when the model requests it.
+
+Example `mcp.yaml`:
+
+```yaml
+servers:
+	- name: files
+		command: files-mcp-server
+		args: ["--root", "."]
+		env:
+			- key: RUST_LOG
+				value: info
+		cwd: .
+```

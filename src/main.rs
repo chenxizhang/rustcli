@@ -8,6 +8,8 @@ use std::{
     io::{self, Write},
 };
 use futures_util::StreamExt;
+mod mcp;
+use mcp::{config::McpConfig, host::McpHost};
 
 #[derive(Parser)]
 #[command(name = "rust-openai-chat")]
@@ -44,13 +46,21 @@ struct Cli {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set, 
         help = "Enable streaming responses (SSE). Set --stream=false to disable.")]
     stream: bool,
+
+    /// Path to MCP configuration file (YAML). If provided, MCP tools can be used.
+    #[arg(long, env = "MCP_CONFIG", hide_env_values = true)]
+    mcp_config: Option<String>,
 }
 
 #[derive(Serialize)]
 struct ChatRequest {
-    messages: Vec<ChatMessage>,
+    messages: Vec<serde_json::Value>,
     max_tokens: u32,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>, // OpenAI tool definitions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
 }
@@ -62,12 +72,12 @@ struct ChatMessage {
 }
 
 #[derive(Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
+struct ChatResponseBasic {
+    choices: Vec<ChoiceBasic>,
 }
 
 #[derive(Deserialize)]
-struct Choice {
+struct ChoiceBasic {
     message: ChatMessage,
 }
 
@@ -90,7 +100,7 @@ impl ChatClient {
         }
     }
 
-    async fn send_message(&self, messages: &[ChatMessage]) -> Result<String> {
+    async fn send_message(&self, messages: &[serde_json::Value]) -> Result<String> {
         let url = format!(
             "{}/openai/deployments/{}/chat/completions?api-version={}",
             self.endpoint, self.model, self.api_version
@@ -100,6 +110,8 @@ impl ChatClient {
             messages: messages.to_vec(),
             max_tokens: 1000,
             temperature: 0.7,
+            tools: None,
+            tool_choice: None,
             stream: Some(false),
         };
 
@@ -118,7 +130,7 @@ impl ChatClient {
             anyhow::bail!("API request failed: {}", error_text);
         }
 
-        let chat_response: ChatResponse = response
+    let chat_response: ChatResponseBasic = response
             .json()
             .await
             .context("Failed to parse response from Azure OpenAI")?;
@@ -132,7 +144,7 @@ impl ChatClient {
             .clone())
     }
 
-    async fn send_message_streaming(&self, messages: &[ChatMessage]) -> Result<String> {
+    async fn send_message_streaming(&self, messages: &[serde_json::Value]) -> Result<String> {
         let url = format!(
             "{}/openai/deployments/{}/chat/completions?api-version={}",
             self.endpoint, self.model, self.api_version
@@ -142,6 +154,8 @@ impl ChatClient {
             messages: messages.to_vec(),
             max_tokens: 1000,
             temperature: 0.7,
+            tools: None,
+            tool_choice: None,
             stream: Some(true),
         };
 
@@ -199,6 +213,41 @@ impl ChatClient {
         // Ensure newline after stream completes
         println!();
         Ok(full_text)
+    }
+
+    // Non-streaming call with tools enabled, returns full JSON value
+    async fn send_with_tools(&self, messages: &[serde_json::Value], tools: &[serde_json::Value]) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/openai/deployments/{}/chat/completions?api-version={}",
+            self.endpoint, self.model, self.api_version
+        );
+
+        let request = ChatRequest {
+            messages: messages.to_vec(),
+            max_tokens: 1000,
+            temperature: 0.7,
+            tools: Some(tools.to_vec()),
+            tool_choice: Some(serde_json::json!({"type":"auto"})),
+            stream: Some(false),
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .header("api-key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send request to Azure OpenAI (tools)")?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("API request failed: {}", error_text);
+        }
+
+        let v: serde_json::Value = response.json().await.context("Failed to parse tools response")?;
+        Ok(v)
     }
 }
 
@@ -266,10 +315,27 @@ async fn main() -> Result<()> {
     };
 
     let chat_client = ChatClient::new(endpoint, api_key, model, cli.api_version.clone());
-    let mut conversation: Vec<ChatMessage> = vec![ChatMessage {
-        role: "system".to_string(),
-        content: "You are a helpful assistant.".to_string(),
-    }];
+
+    // Load MCP config and start servers (non-blocking best-effort)
+    let mut mcp_host: Option<McpHost> = None;
+    if let Some(cfg_path) = &cli.mcp_config {
+        match McpConfig::load_from_path(cfg_path) {
+            Ok(cfg) => {
+                match McpHost::from_config(cfg).await {
+                    Ok(host) => {
+                        mcp_host = Some(host);
+                        eprintln!("[MCP] Loaded servers and tools.");
+                    }
+                    Err(e) => eprintln!("[MCP] Failed to start servers: {}", e),
+                }
+            }
+            Err(e) => eprintln!("[MCP] Failed to load config: {}", e),
+        }
+    }
+    let mut conversation: Vec<serde_json::Value> = vec![serde_json::json!({
+        "role":"system",
+        "content":"You are a helpful assistant."
+    })];
 
     println!("🤖 Azure OpenAI Chat CLI");
     println!("Type 'quit' or 'exit' to end the conversation.");
@@ -291,10 +357,7 @@ async fn main() -> Result<()> {
             }
             "clear" => {
                 conversation.clear();
-                conversation.push(ChatMessage {
-                    role: "system".to_string(),
-                    content: "You are a helpful assistant.".to_string(),
-                });
+                conversation.push(serde_json::json!({"role":"system","content":"You are a helpful assistant."}));
                 println!("🗑️ Conversation cleared!");
                 continue;
             }
@@ -303,10 +366,7 @@ async fn main() -> Result<()> {
         }
 
     // Append user message to the conversation history
-        conversation.push(ChatMessage {
-            role: "user".to_string(),
-            content: user_input,
-        });
+    conversation.push(serde_json::json!({"role":"user","content": user_input}));
 
     // Show a "thinking" indicator
         print!("🤖 Assistant: ");
@@ -316,11 +376,57 @@ async fn main() -> Result<()> {
             io::stdout().flush().unwrap();
         }
 
-    // Send request to Azure OpenAI
-        let result = if cli.stream {
+    // Send request to Azure OpenAI (MVP: no tool-call loop yet)
+        let result = if cli.stream && mcp_host.is_none() {
             chat_client.send_message_streaming(&conversation).await
-        } else {
+        } else if mcp_host.is_none() {
             chat_client.send_message(&conversation).await
+        } else {
+            // With MCP enabled, run non-streaming tool-call loop
+            // Build tool definitions from MCP
+            let mut host = mcp_host.as_mut().unwrap();
+            let tools: Vec<serde_json::Value> = host.tools.values().map(|(_server, desc)| {
+                serde_json::json!({
+                    "type":"function",
+                    "function":{
+                        "name": desc.name,
+                        "description": desc.description.clone().unwrap_or_default(),
+                        "parameters": desc.input_schema
+                    }
+                })
+            }).collect();
+
+            let mut local_conv = conversation.clone();
+            let final_text = loop {
+                let resp = chat_client.send_with_tools(&local_conv, &tools).await?;
+                let choice = &resp["choices"][0]["message"];
+                // Append assistant message (may have tool_calls)
+                local_conv.push(choice.clone());
+                if let Some(tool_calls) = choice.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in tool_calls {
+                        let id = tc["id"].as_str().unwrap_or_default();
+                        let func = &tc["function"];
+                        let name = func["name"].as_str().unwrap_or("");
+                        let args_str = func["arguments"].as_str().unwrap_or("{}");
+                        let args_json: serde_json::Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({"raw": args_str}));
+                        let tool_result = host.call(name, args_json).await.unwrap_or(serde_json::json!({"error":"tool call failed"}));
+                        local_conv.push(serde_json::json!({
+                            "role":"tool",
+                            "tool_call_id": id,
+                            "content": serde_json::to_string(&tool_result).unwrap_or("null".to_string())
+                        }));
+                    }
+                    // Continue loop to let model consume tool outputs
+                    continue;
+                } else {
+                    // No tool calls; return content
+                    let content = choice.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                    break content;
+                }
+            };
+
+            // Update real conversation with latest assistant text
+            Ok(final_text)
         };
 
         match result {
@@ -331,10 +437,7 @@ async fn main() -> Result<()> {
                 }
 
                 // Append assistant reply to conversation history
-                conversation.push(ChatMessage {
-                    role: "assistant".to_string(),
-                    content: response,
-                });
+                conversation.push(serde_json::json!({"role":"assistant","content": response}));
             }
             Err(e) => {
                 println!("\r❌ Error: {}", e);
